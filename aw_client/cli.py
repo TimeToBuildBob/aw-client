@@ -236,6 +236,7 @@ def print_top(events: List[Event], key=lambda e: e.data, title="Events", n=10):
 @click.option("--cache", is_flag=True)
 @click.option("--start", default=now - td1day, type=click.DateTime())
 @click.option("--stop", default=now + td1yr, type=click.DateTime())
+@click.option("--format", type=click.Choice(["table", "json"]), default="table", help="Output format (table or json)")
 @click.pass_obj
 def canonical(
     obj: _Context,
@@ -243,6 +244,7 @@ def canonical(
     cache: bool,
     start: datetime,
     stop: datetime,
+    format: str,
     name: Optional[str] = None,
 ):
     logger.info(f"Querying between {start} and {stop}")
@@ -270,29 +272,43 @@ def canonical(
 
     # TODO: Print titles, apps, categories, with most time
     for period in result:
-        print()
         events = _parse_events(period)
-        print(f"Showing last 10 out of {len(events)} events:")
 
-        print(
-            tabulate(
-                [
-                    (
-                        str(e.timestamp).split(".")[0],
-                        str(e.duration).split(".")[0],
-                        f'[{e.data["app"]}] {textwrap.shorten(e.data["title"], 60, placeholder="...")}',
-                    )
-                    for e in events[-10:]
-                ],
-                headers=["Timestamp", "Duration", "Data"],
+        if format == "json":
+            # Output as JSON array with ISO-8601 timestamps
+            json_events = [
+                {
+                    "timestamp": e.timestamp.isoformat(),
+                    "duration": e.duration,
+                    "data": e.data,
+                }
+                for e in events
+            ]
+            print(json.dumps(json_events))
+        else:
+            # Table format (original behavior)
+            print()
+            print(f"Showing last 10 out of {len(events)} events:")
+
+            print(
+                tabulate(
+                    [
+                        (
+                            str(e.timestamp).split(".")[0],
+                            str(e.duration).split(".")[0],
+                            f'[{e.data["app"]}] {textwrap.shorten(e.data["title"], 60, placeholder="...")}',
+                        )
+                        for e in events[-10:]
+                    ],
+                    headers=["Timestamp", "Duration", "Data"],
+                )
             )
-        )
 
-        print()
-        print(
-            "Total duration:\t",
-            timedelta(seconds=sum(e["duration"] for e in period)),
-        )
+            print()
+            print(
+                "Total duration:\t",
+                timedelta(seconds=sum(e["duration"] for e in period)),
+            )
 
 
 if __name__ == "__main__":
