@@ -236,7 +236,12 @@ def print_top(events: List[Event], key=lambda e: e.data, title="Events", n=10):
 @click.option("--cache", is_flag=True)
 @click.option("--start", default=now - td1day, type=click.DateTime())
 @click.option("--stop", default=now + td1yr, type=click.DateTime())
-@click.option("--format", type=click.Choice(["table", "json"]), default="table", help="Output format (table or json)")
+@click.option(
+    "--format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    help="Output format (table or json)",
+)
 @click.pass_obj
 def canonical(
     obj: _Context,
@@ -279,7 +284,7 @@ def canonical(
             json_events = [
                 {
                     "timestamp": e.timestamp.isoformat(),
-                    "duration": e.duration,
+                    "duration": e.duration.total_seconds(),
                     "data": e.data,
                 }
                 for e in events
