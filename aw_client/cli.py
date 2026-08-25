@@ -38,8 +38,9 @@ class _Context:
 )
 @click.option(
     "--port",
-    default=5600,
-    help="Port to use",
+    default=None,
+    type=int,
+    help="Port to use (default: profile config, 5600 / 5666)",
 )
 @click.option(
     "-v",
@@ -58,11 +59,12 @@ def main(
     ctx, testing: bool, verbose: bool, host: str, port: int, profile: Optional[str]
 ):
     ctx.obj = _Context()
-    # Click defaults --port to 5600; treat that as unset so the profile's
-    # config (5666 for testing, baked 5667 for research) can win.
+    # default=None so `--port 5600` is a real override, not discarded as
+    # "the Click default". None lets ActivityWatchClient read the profile
+    # config (5600 / 5666 / baked research port).
     ctx.obj.client = aw_client.ActivityWatchClient(
         host=host,
-        port=port if port != 5600 else None,
+        port=port,
         testing=testing,
         profile=profile,
     )
