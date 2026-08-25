@@ -86,6 +86,27 @@ class TestPersistqueueSuffix:
         )
         assert "aw-test-client-research." in research.request_queue.persistqueue_path
 
+    def test_reconnect_preserves_named_profile_queue_path(
+        self, isolated_dirs, monkeypatch
+    ):
+        def profile_data_dir(module):
+            profile = os.environ.get("AW_PROFILE")
+            root = "activitywatch" if profile is None else f"activitywatch-{profile}"
+            return str(isolated_dirs / root / module)
+
+        monkeypatch.setattr(client_module, "get_data_dir", profile_data_dir)
+        research = ActivityWatchClient("aw-test-client", profile="research")
+        original_path = research.request_queue.persistqueue_path
+        monkeypatch.setattr(research.request_queue, "_try_connect", lambda: True)
+        research.request_queue.connected = True
+        research.connect()
+
+        default = ActivityWatchClient("other-client", profile="default")
+        assert default.request_queue.persistqueue_path != original_path
+        research.disconnect()
+
+        assert research.request_queue.persistqueue_path == original_path
+
 
 def test_load_local_server_api_key_named_profile(tmp_path, monkeypatch):
     # Patch get_config_dir rather than XDG_CONFIG_HOME — platformdirs on

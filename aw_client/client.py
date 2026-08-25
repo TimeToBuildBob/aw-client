@@ -418,7 +418,9 @@ class ActivityWatchClient:
         self.request_queue.join()
 
         # Throw away old thread object, create new one since same thread cannot be started twice
-        self.request_queue = RequestQueue(self)
+        self.request_queue = RequestQueue(
+            self, persistqueue_path=self.request_queue.persistqueue_path
+        )
         # Reset so warn-before-connect fires again if user calls queued ops before reconnecting
         self._warned_queue_before_connect = False
 
@@ -463,7 +465,11 @@ class RequestQueue(threading.Thread):
 
     VERSION = 1  # update this whenever the queue-file format changes
 
-    def __init__(self, client: ActivityWatchClient) -> None:
+    def __init__(
+        self,
+        client: ActivityWatchClient,
+        persistqueue_path: Optional[str] = None,
+    ) -> None:
         threading.Thread.__init__(self, daemon=True)
 
         self.client = client
@@ -476,22 +482,22 @@ class RequestQueue(threading.Thread):
 
         self._attempt_reconnect_interval = 10
 
-        # Setup failed queues file
-        data_dir = get_data_dir("aw-client")
-        queued_dir = os.path.join(data_dir, "queued")
-        if not os.path.exists(queued_dir):
-            os.makedirs(queued_dir)
+        if persistqueue_path is None:
+            data_dir = get_data_dir("aw-client")
+            queued_dir = os.path.join(data_dir, "queued")
+            if not os.path.exists(queued_dir):
+                os.makedirs(queued_dir)
 
-        profile = getattr(client, "profile", None)
-        suffix = (
-            profile_suffix(profile)
-            if profile is not None
-            else ("-testing" if client.testing else "")
-        )
-        persistqueue_path = os.path.join(
-            queued_dir,
-            f"{self.client.client_name}{suffix}.v{self.VERSION}.persistqueue",
-        )
+            profile = getattr(client, "profile", None)
+            suffix = (
+                profile_suffix(profile)
+                if profile is not None
+                else ("-testing" if client.testing else "")
+            )
+            persistqueue_path = os.path.join(
+                queued_dir,
+                f"{self.client.client_name}{suffix}.v{self.VERSION}.persistqueue",
+            )
 
         logger.debug(f"queue path '{persistqueue_path}'")
         self.persistqueue_path = persistqueue_path
