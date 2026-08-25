@@ -25,6 +25,14 @@ from aw_core.models import Event
 from aw_transform.heartbeats import heartbeat_merge
 
 from .config import load_config, load_local_server_api_key
+from .profile import (
+    DEFAULT_PROFILE,
+    export_profile,
+    is_testing,
+    profile_from_env,
+    profile_suffix,
+    resolve_profile,
+)
 from .singleinstance import SingleInstance
 
 # FIXME: This line is probably badly placed
@@ -67,6 +75,7 @@ class ActivityWatchClient:
         host=None,
         port=None,
         protocol="http",
+        profile: Optional[str] = None,
     ) -> None:
         """
         A handy wrapper around the aw-server REST API. The recommended way of interacting with the server.
@@ -77,19 +86,37 @@ class ActivityWatchClient:
 
         .. literalinclude:: examples/client.py
             :lines: 7-
+
+        ``profile`` selects an isolated instance (config, port, queue file).
+        ``testing=True`` is the compat shim for ``profile="testing"``. If
+        neither is set, ``AW_PROFILE`` from the launcher is used.
         """
-        self.testing = testing
+        if profile is not None or testing:
+            resolved = resolve_profile(profile, testing)
+        else:
+            resolved = profile_from_env(False)
+        export_profile(resolved)
+        self.profile = resolved
+        self.testing = is_testing(resolved)
 
         self.client_name = client_name
         self.client_hostname = socket.gethostname()
 
         _config = load_config()
-        server_config = _config["server" if not testing else "server-testing"]
-        client_config = _config["client" if not testing else "client-testing"]
+        server_key = "server" if resolved == DEFAULT_PROFILE else f"server-{resolved}"
+        client_key = "client" if resolved == DEFAULT_PROFILE else f"client-{resolved}"
+        if server_key not in _config:
+            server_key = "server"
+        if client_key not in _config:
+            client_key = "client"
+        server_config = _config[server_key]
+        client_config = _config[client_key]
 
         server_host = host or server_config["hostname"]
         server_port = port or server_config["port"]
-        self.server_api_key = load_local_server_api_key(str(server_host), server_port)
+        self.server_api_key = load_local_server_api_key(
+            str(server_host), server_port, profile=resolved
+        )
         self.server_address = f"{protocol}://{server_host}:{server_port}"
 
         self.instance = SingleInstance(
@@ -455,16 +482,19 @@ class RequestQueue(threading.Thread):
         if not os.path.exists(queued_dir):
             os.makedirs(queued_dir)
 
+        profile = getattr(client, "profile", None)
+        suffix = (
+            profile_suffix(profile)
+            if profile is not None
+            else ("-testing" if client.testing else "")
+        )
         persistqueue_path = os.path.join(
             queued_dir,
-            "{}{}.v{}.persistqueue".format(
-                self.client.client_name,
-                "-testing" if client.testing else "",
-                self.VERSION,
-            ),
+            f"{self.client.client_name}{suffix}.v{self.VERSION}.persistqueue",
         )
 
         logger.debug(f"queue path '{persistqueue_path}'")
+        self.persistqueue_path = persistqueue_path
 
         self._persistqueue = persistqueue.FIFOSQLiteQueue(
             persistqueue_path, multithreading=True, auto_commit=False

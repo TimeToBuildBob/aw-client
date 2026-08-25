@@ -48,13 +48,23 @@ class _Context:
     help="Verbosity",
 )
 @click.option("--testing", is_flag=True, help="Set to use testing ports by default")
+@click.option(
+    "--profile",
+    default=None,
+    help="Named instance profile. --testing is an alias for --profile testing.",
+)
 @click.pass_context
-def main(ctx, testing: bool, verbose: bool, host: str, port: int):
+def main(
+    ctx, testing: bool, verbose: bool, host: str, port: int, profile: Optional[str]
+):
     ctx.obj = _Context()
+    # Click defaults --port to 5600; treat that as unset so the profile's
+    # config (5666 for testing, baked 5667 for research) can win.
     ctx.obj.client = aw_client.ActivityWatchClient(
         host=host,
-        port=port if port != 5600 else (5666 if testing else 5600),
+        port=port if port != 5600 else None,
         testing=testing,
+        profile=profile,
     )
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO)
 

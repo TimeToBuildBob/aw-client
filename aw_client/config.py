@@ -6,6 +6,8 @@ import tomlkit
 from aw_core import dirs
 from aw_core.config import load_config_toml
 
+from .profile import DEFAULT_PROFILE, TESTING_PROFILE, profile_from_env
+
 logger = logging.getLogger(__name__)
 
 default_config = """
@@ -29,7 +31,11 @@ def load_config():
     return load_config_toml("aw-client", default_config)
 
 
-def load_local_server_api_key(host: str, port: Union[int, str]) -> Optional[str]:
+def load_local_server_api_key(
+    host: str,
+    port: Union[int, str],
+    profile: Optional[str] = None,
+) -> Optional[str]:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         return None
 
@@ -38,11 +44,19 @@ def load_local_server_api_key(host: str, port: Union[int, str]) -> Optional[str]
     except (TypeError, ValueError):
         return None
 
+    if profile is None:
+        profile = profile_from_env(False)
+
     config_dir = dirs.get_config_dir("aw-server-rust")
-    candidates = (
-        ("config.toml", 5600),
-        ("config-testing.toml", 5666),
-    )
+    # Named profiles only read their own rust config so a research client
+    # does not pick up the default instance's API key.
+    if profile not in (DEFAULT_PROFILE, TESTING_PROFILE):
+        candidates = [(f"config-{profile}.toml", 5600)]
+    else:
+        candidates = [
+            ("config.toml", 5600),
+            ("config-testing.toml", 5666),
+        ]
 
     for filename, default_port in candidates:
         config_path = os.path.join(config_dir, filename)
