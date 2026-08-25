@@ -87,23 +87,20 @@ class TestPersistqueueSuffix:
         assert "aw-test-client-research." in research.request_queue.persistqueue_path
 
 
-def write_server_config(tmp_path, filename: str, content: str) -> None:
-    config_dir = tmp_path / "activitywatch" / "aw-server-rust"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    (config_dir / filename).write_text(content)
-
-
 def test_load_local_server_api_key_named_profile(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    write_server_config(
-        tmp_path,
-        "config-research.toml",
-        'port = 5667\n\n[auth]\napi_key = "research-secret"\n',
+    # Patch get_config_dir rather than XDG_CONFIG_HOME — platformdirs on
+    # macOS/Windows ignores XDG_* even when set.
+    monkeypatch.setattr(
+        "aw_client.config.dirs.get_config_dir",
+        lambda module: str(tmp_path / module),
     )
-    write_server_config(
-        tmp_path,
-        "config.toml",
-        'port = 5600\n\n[auth]\napi_key = "default-secret"\n',
+    rust_dir = tmp_path / "aw-server-rust"
+    rust_dir.mkdir()
+    (rust_dir / "config-research.toml").write_text(
+        'port = 5667\n\n[auth]\napi_key = "research-secret"\n'
+    )
+    (rust_dir / "config.toml").write_text(
+        'port = 5600\n\n[auth]\napi_key = "default-secret"\n'
     )
     assert (
         load_local_server_api_key("127.0.0.1", 5667, profile="research")
