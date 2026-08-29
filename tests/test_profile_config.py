@@ -1,12 +1,14 @@
 """Client constructor, config sections, persistqueue, and rust api-key lookup."""
 
+import logging
 import os
+from pathlib import Path
 
 import pytest
 
 from aw_client import ActivityWatchClient
 from aw_client import client as client_module
-from aw_client.config import load_local_server_api_key
+from aw_client.config import load_local_server_api_key, rust_server_config_candidates
 from aw_client.profile import DEFAULT_PROFILE, TESTING_PROFILE
 
 
@@ -42,12 +44,18 @@ class TestClientConstructor:
         assert client.server_address.endswith(":5600")
         assert "AW_PROFILE" not in os.environ
 
-    def test_named_profile_falls_back_to_server_section(self, isolated_dirs):
-        client = ActivityWatchClient("t", profile="research")
+    def test_named_profile_falls_back_to_server_section(self, isolated_dirs, caplog):
+        with caplog.at_level(logging.WARNING, logger="aw_client.client"):
+            client = ActivityWatchClient("t", profile="research")
         assert client.profile == "research"
         assert client.testing is False
         assert client.server_address.endswith(":5600")
         assert os.environ["AW_PROFILE"] == "research"
+        assert any(
+            "falling back to [server]" in rec.message
+            and "may collide with the default instance" in rec.message
+            for rec in caplog.records
+        )
 
     def test_env_from_launcher_is_used_when_no_flags(self, isolated_dirs, monkeypatch):
         monkeypatch.setenv("AW_PROFILE", "research")
@@ -108,20 +116,64 @@ class TestPersistqueueSuffix:
         assert research.request_queue.persistqueue_path == original_path
 
 
-def test_load_local_server_api_key_named_profile(tmp_path, monkeypatch):
-    # Patch get_config_dir rather than XDG_CONFIG_HOME — platformdirs on
-    # macOS/Windows ignores XDG_* even when set.
+@pytest.fixture
+def fake_platform_dirs(tmp_path, monkeypatch):
+    """Point rust-config lookup at a tmp tree. platformdirs on macOS/Windows
+    ignores XDG_* even when set, so patch the wrappers rather than env vars.
+    """
+    data = tmp_path / "data"
+    config = tmp_path / "config"
+    cache = tmp_path / "cache"
+
+    def _join(root: Path, appname: str) -> str:
+        return str(root / appname)
+
     monkeypatch.setattr(
-        "aw_client.config.dirs.get_config_dir",
-        lambda module: str(tmp_path / module),
+        "aw_client.config._user_data_dir", lambda appname: _join(data, appname)
     )
-    rust_dir = tmp_path / "aw-server-rust"
-    rust_dir.mkdir()
-    (rust_dir / "config-research.toml").write_text(
-        'port = 5667\n\n[auth]\napi_key = "research-secret"\n'
+    monkeypatch.setattr(
+        "aw_client.config._user_config_dir",
+        lambda appname: _join(config, appname),
     )
-    (rust_dir / "config.toml").write_text(
-        'port = 5600\n\n[auth]\napi_key = "default-secret"\n'
+    monkeypatch.setattr(
+        "aw_client.config._user_cache_dir",
+        lambda appname: _join(cache, appname),
+    )
+    monkeypatch.delenv("AW_PROFILE", raising=False)
+    return {"data": data, "config": config, "cache": cache, "root": tmp_path}
+
+
+def _write_rust_config(
+    config_root: Path, appname: str, filename: str, content: str
+) -> Path:
+    rust_dir = config_root / appname / "aw-server-rust"
+    rust_dir.mkdir(parents=True, exist_ok=True)
+    path = rust_dir / filename
+    path.write_text(content)
+    return path
+
+
+def test_load_local_server_api_key_named_profile(fake_platform_dirs):
+    config = fake_platform_dirs["config"]
+    _write_rust_config(
+        config,
+        "activitywatch-research",
+        "config.toml",
+        'port = 5667\n\n[auth]\napi_key = "research-secret"\n',
+    )
+    _write_rust_config(
+        config,
+        "activitywatch",
+        "config.toml",
+        'port = 5600\n\n[auth]\napi_key = "default-secret"\n',
+    )
+    # Suffixed names in the isolated root must not be read — dir isolation
+    # is the point (ActivityWatch/activitywatch#1399).
+    _write_rust_config(
+        config,
+        "activitywatch-research",
+        "config-research.toml",
+        'port = 5667\n\n[auth]\napi_key = "suffixed-must-be-ignored"\n',
     )
     assert (
         load_local_server_api_key("127.0.0.1", 5667, profile="research")
@@ -131,6 +183,74 @@ def test_load_local_server_api_key_named_profile(tmp_path, monkeypatch):
         "default-secret"
     )
     assert load_local_server_api_key("127.0.0.1", 5600, profile="research") is None
+
+
+class TestTestingRootApiKeyLookup:
+    """Rust API-key lookup follows the #1399 testing-root rule."""
+
+    def test_fresh_setup_reads_bare_config_in_new_root(self, fake_platform_dirs):
+        _write_rust_config(
+            fake_platform_dirs["config"],
+            "activitywatch-testing",
+            "config.toml",
+            'port = 5666\n\n[auth]\napi_key = "new-root-secret"\n',
+        )
+        assert (
+            load_local_server_api_key("127.0.0.1", 5666, profile="testing")
+            == "new-root-secret"
+        )
+        paths = [p for p, _ in rust_server_config_candidates("testing")]
+        assert paths[0].endswith(
+            os.path.join("activitywatch-testing", "aw-server-rust", "config.toml")
+        )
+
+    def test_legacy_artifacts_keep_suffixed_shared_root(self, fake_platform_dirs):
+        _write_rust_config(
+            fake_platform_dirs["config"],
+            "activitywatch",
+            "config-testing.toml",
+            'port = 5666\n\n[auth]\napi_key = "legacy-secret"\n',
+        )
+        assert (
+            load_local_server_api_key("127.0.0.1", 5666, profile="testing")
+            == "legacy-secret"
+        )
+        paths = [p for p, _ in rust_server_config_candidates("testing")]
+        assert paths[0].endswith(
+            os.path.join("activitywatch", "aw-server-rust", "config-testing.toml")
+        )
+
+    def test_new_root_wins_over_legacy_artifacts(self, fake_platform_dirs):
+        _write_rust_config(
+            fake_platform_dirs["config"],
+            "activitywatch",
+            "config-testing.toml",
+            'port = 5666\n\n[auth]\napi_key = "legacy-secret"\n',
+        )
+        _write_rust_config(
+            fake_platform_dirs["config"],
+            "activitywatch-testing",
+            "config.toml",
+            'port = 5666\n\n[auth]\napi_key = "new-root-secret"\n',
+        )
+        assert (
+            load_local_server_api_key("127.0.0.1", 5666, profile="testing")
+            == "new-root-secret"
+        )
+
+    def test_empty_new_root_still_finds_legacy_key(self, fake_platform_dirs):
+        """Python creating activitywatch-testing/ must not hide rust's legacy key."""
+        (fake_platform_dirs["config"] / "activitywatch-testing").mkdir(parents=True)
+        _write_rust_config(
+            fake_platform_dirs["config"],
+            "activitywatch",
+            "config-testing.toml",
+            'port = 5666\n\n[auth]\napi_key = "legacy-secret"\n',
+        )
+        assert (
+            load_local_server_api_key("127.0.0.1", 5666, profile="testing")
+            == "legacy-secret"
+        )
 
 
 class TestCliPortOverride:

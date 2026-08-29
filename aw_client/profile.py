@@ -18,12 +18,18 @@ instead of setting it to ``"default"``. aw-core treats any non-empty
 value as a suffix, so ``AW_PROFILE=default`` would resolve to
 ``activitywatch-default`` and orphan an existing install.
 
-Testing-root note (ActivityWatch/activitywatch#1399): python aw-core#149
-maps ``AW_PROFILE=testing`` to ``activitywatch-testing``. The rust
-isolation branch keeps testing on the bare ``activitywatch`` root so
-existing ``sqlite-testing.db`` files are not orphaned. This module follows
-the already-merged python dirs contract; unifying the rust testing root
-is a follow-up on that isolation PR, not something to special-case here.
+Testing-root note (ActivityWatch/activitywatch#1399): python and rust
+resolve ``testing`` identically — new-root-plus-legacy-fallback:
+
+1. If ``activitywatch-testing/`` exists: use it.
+2. Else if legacy testing artifacts exist in the bare ``activitywatch/``
+   root: stay in legacy mode.
+3. Else (fresh setup): create and use ``activitywatch-testing/``.
+
+Isolated roots use bare filenames (``config.toml``). Suffixed names
+(``config-testing.toml``) stay legacy-only. The rust API-key lookup in
+``config.py`` follows this rule so a ``--testing`` client finds the key
+where aw-server-rust actually wrote it.
 """
 
 import os
